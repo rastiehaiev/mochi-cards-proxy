@@ -17,21 +17,62 @@ const mochiRequest = async (path, method = 'GET', body = null) => {
   return { ok: res.ok, status: res.status, data };
 };
 
+const buildContent = ({ key, value, slides }) => {
+  if (Array.isArray(slides) && slides.length > 0) return slides.join('\n---\n');
+  if (key && value) return `${key}\n---\n${value}`;
+  return null;
+};
+
 const handlers = {
 
-  // POST /cards — create a card
+  // POST /cards — create a single card
+  // Accepts either { key, value, deckId } or { slides: [...], deckId }
   'POST /cards': async (body) => {
-    const { key, value, deckId } = body;
-    if (!key || !value || !deckId) {
-      return { status: 400, data: { error: 'Missing fields: key, value, deckId' } };
-    }
+    const { deckId } = body;
+    if (!deckId) return { status: 400, data: { error: 'Missing field: deckId' } };
+    const content = buildContent(body);
+    if (!content) return { status: 400, data: { error: 'Provide either key+value or a non-empty slides array' } };
     const result = await mochiRequest('/cards/', 'POST', {
-      'content': `${key}\n---\n${value}`,
+      'content': content,
       'deck-id': deckId,
       'review-reverse?': true
     });
     if (!result.ok) return { status: result.status, data: { error: result.data } };
     return { status: 200, data: { success: true, cardId: result.data.id } };
+  },
+
+  // POST /cards/batch — create up to 10 cards sequentially
+  // Each card accepts either { key, value } or { slides: [...] }
+  'POST /cards/batch': async (body) => {
+    const { cards, deckId } = body;
+    if (!Array.isArray(cards) || !deckId) {
+      return { status: 400, data: { error: 'Missing fields: cards (array), deckId' } };
+    }
+    if (cards.length > 10) {
+      return { status: 400, data: { error: 'Maximum 10 cards per batch' } };
+    }
+    if (cards.length === 0) {
+      return { status: 400, data: { error: 'cards array is empty' } };
+    }
+    const results = [];
+    for (const card of cards) {
+      const content = buildContent(card);
+      const label = card.key || card.slides?.[0] || '?';
+      if (!content) {
+        results.push({ success: false, key: label, error: 'Provide either key+value or a non-empty slides array' });
+        continue;
+      }
+      const result = await mochiRequest('/cards/', 'POST', {
+        'content': content,
+        'deck-id': deckId,
+        'review-reverse?': true
+      });
+      if (!result.ok) results.push({ success: false, key: label, error: result.data });
+      else results.push({ success: true, key: label, cardId: result.data.id });
+    }
+    const created = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+    return { status: 200, data: { created, failed, results } };
   },
 
   // DELETE /cards — delete a card
