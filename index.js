@@ -20,9 +20,9 @@ const mochiRequest = async (path, method = 'GET', body = null) => {
 const handlers = {
 
   // POST /cards — create a single card
-  // Body: { slides: string[], deckId: string, tags?: string[] }
+  // Body: { slides: string[], deckId: string, tags?: string[], reverse?: boolean }
   'POST /cards': async (body) => {
-    const { slides, deckId, tags } = body;
+    const { slides, deckId, tags, reverse = true } = body;
     if (!deckId) return { status: 400, data: { error: 'Missing field: deckId' } };
     if (!Array.isArray(slides) || slides.length === 0) {
       return { status: 400, data: { error: 'Missing field: slides (non-empty array)' } };
@@ -30,7 +30,7 @@ const handlers = {
     const payload = {
       'content': slides.join('\n---\n'),
       'deck-id': deckId,
-      'review-reverse?': true
+      'review-reverse?': reverse
     };
     if (Array.isArray(tags) && tags.length > 0) payload['manual-tags'] = tags;
     const result = await mochiRequest('/cards/', 'POST', payload);
@@ -39,9 +39,9 @@ const handlers = {
   },
 
   // POST /cards/batch — create up to 10 cards sequentially
-  // Body: { cards: { slides: string[], tags?: string[] }[], deckId: string }
+  // Body: { cards: { slides: string[], tags?: string[], reverse?: boolean }[], deckId: string, reverse?: boolean }
   'POST /cards/batch': async (body) => {
-    const { cards, deckId } = body;
+    const { cards, deckId, reverse: defaultReverse = true } = body;
     if (!Array.isArray(cards) || !deckId) {
       return { status: 400, data: { error: 'Missing fields: cards (array), deckId' } };
     }
@@ -53,7 +53,7 @@ const handlers = {
     }
     const results = [];
     for (const card of cards) {
-      const { slides, tags } = card;
+      const { slides, tags, reverse = defaultReverse } = card;
       if (!Array.isArray(slides) || slides.length === 0) {
         results.push({ success: false, error: 'Missing or empty slides array' });
         continue;
@@ -61,7 +61,7 @@ const handlers = {
       const payload = {
         'content': slides.join('\n---\n'),
         'deck-id': deckId,
-        'review-reverse?': true
+        'review-reverse?': reverse
       };
       if (Array.isArray(tags) && tags.length > 0) payload['manual-tags'] = tags;
       const result = await mochiRequest('/cards/', 'POST', payload);
@@ -74,17 +74,18 @@ const handlers = {
   },
 
   // PATCH /cards — update an existing card
-  // Body: { cardId: string, slides?: string[], tags?: string[], deckId?: string }
+  // Body: { cardId: string, slides?: string[], tags?: string[], deckId?: string, reverse?: boolean }
   'PATCH /cards': async (body) => {
-    const { cardId, slides, tags, deckId } = body;
+    const { cardId, slides, tags, deckId, reverse } = body;
     if (!cardId) return { status: 400, data: { error: 'Missing field: cardId' } };
-    if (!slides && !tags && !deckId) {
-      return { status: 400, data: { error: 'Provide at least one field to update: slides, tags, or deckId' } };
+    if (!slides && !tags && !deckId && reverse === undefined) {
+      return { status: 400, data: { error: 'Provide at least one field to update: slides, tags, deckId, or reverse' } };
     }
     const payload = {};
     if (Array.isArray(slides) && slides.length > 0) payload['content'] = slides.join('\n---\n');
     if (Array.isArray(tags)) payload['manual-tags'] = tags;
     if (deckId) payload['deck-id'] = deckId;
+    if (reverse !== undefined) payload['review-reverse?'] = reverse;
     const result = await mochiRequest(`/cards/${cardId}`, 'POST', payload);
     if (!result.ok) return { status: result.status, data: { error: result.data } };
     return { status: 200, data: { success: true, cardId: result.data.id } };
