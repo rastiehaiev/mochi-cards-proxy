@@ -17,23 +17,18 @@ const mochiRequest = async (path, method = 'GET', body = null) => {
   return { ok: res.ok, status: res.status, data };
 };
 
-const buildContent = ({ key, value, slides }) => {
-  if (Array.isArray(slides) && slides.length > 0) return slides.join('\n---\n');
-  if (key && value) return `${key}\n---\n${value}`;
-  return null;
-};
-
 const handlers = {
 
   // POST /cards — create a single card
-  // Accepts either { key, value, deckId } or { slides: [...], deckId }
+  // Body: { slides: string[], deckId: string }
   'POST /cards': async (body) => {
-    const { deckId } = body;
+    const { slides, deckId } = body;
     if (!deckId) return { status: 400, data: { error: 'Missing field: deckId' } };
-    const content = buildContent(body);
-    if (!content) return { status: 400, data: { error: 'Provide either key+value or a non-empty slides array' } };
+    if (!Array.isArray(slides) || slides.length === 0) {
+      return { status: 400, data: { error: 'Missing field: slides (non-empty array)' } };
+    }
     const result = await mochiRequest('/cards/', 'POST', {
-      'content': content,
+      'content': slides.join('\n---\n'),
       'deck-id': deckId,
       'review-reverse?': true
     });
@@ -42,7 +37,7 @@ const handlers = {
   },
 
   // POST /cards/batch — create up to 10 cards sequentially
-  // Each card accepts either { key, value } or { slides: [...] }
+  // Body: { cards: { slides: string[] }[], deckId: string }
   'POST /cards/batch': async (body) => {
     const { cards, deckId } = body;
     if (!Array.isArray(cards) || !deckId) {
@@ -56,19 +51,18 @@ const handlers = {
     }
     const results = [];
     for (const card of cards) {
-      const content = buildContent(card);
-      const label = card.key || card.slides?.[0] || '?';
-      if (!content) {
-        results.push({ success: false, key: label, error: 'Provide either key+value or a non-empty slides array' });
+      const { slides } = card;
+      if (!Array.isArray(slides) || slides.length === 0) {
+        results.push({ success: false, error: 'Missing or empty slides array' });
         continue;
       }
       const result = await mochiRequest('/cards/', 'POST', {
-        'content': content,
+        'content': slides.join('\n---\n'),
         'deck-id': deckId,
         'review-reverse?': true
       });
-      if (!result.ok) results.push({ success: false, key: label, error: result.data });
-      else results.push({ success: true, key: label, cardId: result.data.id });
+      if (!result.ok) results.push({ success: false, slide: slides[0], error: result.data });
+      else results.push({ success: true, slide: slides[0], cardId: result.data.id });
     }
     const created = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
@@ -76,17 +70,17 @@ const handlers = {
   },
 
   // DELETE /cards — delete a card
+  // Body: { cardId: string }
   'DELETE /cards': async (body) => {
     const { cardId } = body;
-    if (!cardId) {
-      return { status: 400, data: { error: 'Missing field: cardId' } };
-    }
+    if (!cardId) return { status: 400, data: { error: 'Missing field: cardId' } };
     const result = await mochiRequest(`/cards/${cardId}`, 'DELETE');
     if (!result.ok) return { status: result.status, data: { error: result.data } };
     return { status: 200, data: { success: true } };
   },
 
-  // GET /cards — list cards (optionally filtered by deckId)
+  // GET /cards — list cards
+  // Query: { deckId?, limit?, bookmark? }
   'GET /cards': async (query) => {
     const params = new URLSearchParams();
     if (query.deckId) params.set('deck-id', query.deckId);
@@ -98,6 +92,7 @@ const handlers = {
   },
 
   // GET /decks — list all decks
+  // Query: { bookmark? }
   'GET /decks': async (query) => {
     const params = new URLSearchParams();
     if (query.bookmark) params.set('bookmark', query.bookmark);
