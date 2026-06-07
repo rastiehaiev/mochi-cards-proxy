@@ -20,24 +20,26 @@ const mochiRequest = async (path, method = 'GET', body = null) => {
 const handlers = {
 
   // POST /cards — create a single card
-  // Body: { slides: string[], deckId: string }
+  // Body: { slides: string[], deckId: string, tags?: string[] }
   'POST /cards': async (body) => {
-    const { slides, deckId } = body;
+    const { slides, deckId, tags } = body;
     if (!deckId) return { status: 400, data: { error: 'Missing field: deckId' } };
     if (!Array.isArray(slides) || slides.length === 0) {
       return { status: 400, data: { error: 'Missing field: slides (non-empty array)' } };
     }
-    const result = await mochiRequest('/cards/', 'POST', {
+    const payload = {
       'content': slides.join('\n---\n'),
       'deck-id': deckId,
       'review-reverse?': true
-    });
+    };
+    if (Array.isArray(tags) && tags.length > 0) payload['manual-tags'] = tags;
+    const result = await mochiRequest('/cards/', 'POST', payload);
     if (!result.ok) return { status: result.status, data: { error: result.data } };
     return { status: 200, data: { success: true, cardId: result.data.id } };
   },
 
   // POST /cards/batch — create up to 10 cards sequentially
-  // Body: { cards: { slides: string[] }[], deckId: string }
+  // Body: { cards: { slides: string[], tags?: string[] }[], deckId: string }
   'POST /cards/batch': async (body) => {
     const { cards, deckId } = body;
     if (!Array.isArray(cards) || !deckId) {
@@ -51,22 +53,41 @@ const handlers = {
     }
     const results = [];
     for (const card of cards) {
-      const { slides } = card;
+      const { slides, tags } = card;
       if (!Array.isArray(slides) || slides.length === 0) {
         results.push({ success: false, error: 'Missing or empty slides array' });
         continue;
       }
-      const result = await mochiRequest('/cards/', 'POST', {
+      const payload = {
         'content': slides.join('\n---\n'),
         'deck-id': deckId,
         'review-reverse?': true
-      });
+      };
+      if (Array.isArray(tags) && tags.length > 0) payload['manual-tags'] = tags;
+      const result = await mochiRequest('/cards/', 'POST', payload);
       if (!result.ok) results.push({ success: false, slide: slides[0], error: result.data });
       else results.push({ success: true, slide: slides[0], cardId: result.data.id });
     }
     const created = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
     return { status: 200, data: { created, failed, results } };
+  },
+
+  // PATCH /cards — update an existing card
+  // Body: { cardId: string, slides?: string[], tags?: string[], deckId?: string }
+  'PATCH /cards': async (body) => {
+    const { cardId, slides, tags, deckId } = body;
+    if (!cardId) return { status: 400, data: { error: 'Missing field: cardId' } };
+    if (!slides && !tags && !deckId) {
+      return { status: 400, data: { error: 'Provide at least one field to update: slides, tags, or deckId' } };
+    }
+    const payload = {};
+    if (Array.isArray(slides) && slides.length > 0) payload['content'] = slides.join('\n---\n');
+    if (Array.isArray(tags)) payload['manual-tags'] = tags;
+    if (deckId) payload['deck-id'] = deckId;
+    const result = await mochiRequest(`/cards/${cardId}`, 'POST', payload);
+    if (!result.ok) return { status: result.status, data: { error: result.data } };
+    return { status: 200, data: { success: true, cardId: result.data.id } };
   },
 
   // DELETE /cards — delete a card
@@ -105,7 +126,7 @@ const handlers = {
 
 export const mochiProxy = async (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
 
   if (req.method === 'OPTIONS') {
